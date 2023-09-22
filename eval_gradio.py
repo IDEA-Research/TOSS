@@ -293,7 +293,7 @@ if __name__ == '__main__':
         hparams.resume_path = "ckpt/old/epoch=204.ckpt"
     elif model_type == "vae":
         hparams.model_cfg = "models/toss_vae.yaml"
-        hparams.resume_path = "ckpt/vae/epoch=204.ckpt"
+        hparams.resume_path = "ckpt/vae/epoch=309.ckpt"
         
     h, w = 256, 256
     precision = 'fp32'

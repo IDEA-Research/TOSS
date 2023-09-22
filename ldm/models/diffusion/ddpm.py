@@ -68,7 +68,7 @@ class DDPM(pl.LightningModule):
                  given_betas=None,
                  original_elbo_weight=0.,
                  embedding_reg_weight=0.,
-                 unfreeze_model=False,
+                 unfreeze_model=True,
                  v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
                  l_simple_weight=1.,
                  conditioning_key=None,
