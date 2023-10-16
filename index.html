@@ -1,0 +1,210 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TOSS: High-quality Text-guided Novel View Synthesis from a Single Image</title>
+    <!-- Bootstrap -->
+    <link href="css/bootstrap-4.4.1.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+    <!-- <link href='http://fonts.googleapis.com/css?family=Open+Sans:400italic,700italic,800italic,400,700,800' rel='stylesheet' type='text/css'>
+    <link rel="stylesheet" type="text/css" href="css/project.css" media="screen" />
+    <link rel="stylesheet" type="text/css" media="screen" href="css/iconize.css" />
+    <script src="js/google-code-prettify/prettify.js"></script> -->
+  </head>
+
+  <!-- cover -->
+  <section>
+    <div class="jumbotron text-center mt-0">
+      <div class="container">
+        <div class="row">
+          <div class="col-12">
+            <h2>TOSS: High-quality Text-guided Novel View Synthesis from a Single Image
+            </h2>
+            <h4 style="color:#5a6268;">Arxiv 2023 </h4>
+            <hr>
+            <h6>
+                Yukai Shi</a><sup>1,3</sup>,
+                Jianan Wang</a><sup>3</sup>,
+                He Cao</a><sup>2,3</sup>,
+                <br/>
+                Boshi Tang</a><sup>1,3</sup>,
+                Xianbiao Qi</a><sup>3</sup>,
+                Tianyu Yang</a><sup>3</sup>,
+                Yukun Huang</a><sup>3</sup>,
+                Shilong Liu</a><sup>1,3</sup>,
+                <br/>
+                Lei Zhang</a><sup>3</sup>,
+                Heung-Yeung Shum</a><sup>1,3</sup>
+            <p>
+                <sup>1</sup>Tsinghua University &nbsp;&nbsp;
+                <sup>2</sup>Hong Kong University of Science and Technology
+                <sup>3</sup>International Digital Economy Academy</span>
+            </p>
+
+            <div class="row justify-content-center">
+              <div class="column">
+                  <p class="mb-5"><a class="btn btn-large btn-light" href="" role="button"  target="_blank">
+                    <i class="fa fa-file"></i> Paper</a> </p>
+              </div>
+              <div class="column">
+                  <p class="mb-5"><a class="btn btn-large btn-light" href="" role="button"  target="_blank">
+                    <i class="fa fa-github-alt"></i> Code </a> </p>
+              </div>
+              <div class="column">
+                  <p class="mb-5"><a class="btn btn-large btn-light" href="" role="button"  target="_blank">
+                    <i class="fa fa-database"></i> Model </a> </p>
+              </div>
+              <div class="column">
+                  <p class="mb-5"><a class="btn btn-large btn-light" href="" role="button"  target="_blank">
+                    <i class="fa fa-desktop"></i> Live Demo </a> </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- abstract -->
+  <section>
+    <div class="container">
+      <div class="row">
+        <div class="col-12 text-center">
+          <h3>Abstract</h3>
+            <hr style="margin-top:0px">
+            <h6> TOSS utilizes text as semantic guidance to further constrain the solution space of NVS, and generates more plausible, controllable, multiview-consistent novel view images from a single image. </h6>
+
+            <img src="figures/teaser.png" style="width:80%">
+
+			        <br>
+
+          <p class="text-left">
+            In this paper, we present TOSS, which introduces text to the task of novel view synthesis (NVS) from just a single RGB image. While Zero-1-to-3 has demonstrated impressive zero-shot open-set NVS capability, it treats NVS as a pure image-to-image translation problem. This approach suffers from the challengingly under-constrained nature of single-view NVS: the process lacks means of explicit user control and often results in implausible NVS generations. To address this limitation, TOSS uses text as high-level semantic information to constrain the NVS solution space. TOSS fine-tunes text-to-image Stable Diffusion pre-trained on large-scale text-image pairs and introduces modules specifically tailored to image and camera pose conditioning, as well as dedicated training for pose correctness and preservation of fine details. Comprehensive experiments are conducted with results showing that our proposed TOSS outperforms Zero-1-to-3 with more plausible, controllable and multiview-consistent NVS results. We further support these results with comprehensive ablations that underscore the effectiveness and potential of the introduced semantic guidance and architecture design.
+          </p>
+
+        <!-- pipline -->
+        <img src="figures/pipeline.png" style="width:80%">
+        <p class="text-center" style="font-size: 22px">
+          The pipeline of TOSS (Left) and our conditioning mechanisms (Right).
+        </p>
+        <br/>
+
+        <img src="figures/cond_compare.png" style="width:80%">
+        <p class="text-center" style="font-size: 22px">
+          Comparing previous image conditioning mechanisms (a-b) and TOSS (c).
+        </p>
+        <br/>
+        
+        </div>
+      </div>
+    </div>
+  </section>
+  <br>
+
+  <section>
+    <div class="container">
+      <div class="row">
+        <div class="col-12 text-center">
+            <h2>Noevel View Synthesis Results on the GSO and RTMV Datasets</h2>
+            <hr style="margin-top:0px">
+          
+          <img src="figures/nvs_metrics.png" style="width:80%">
+          <p class="text-center" style="font-size: 22px">
+            Quantitative comparison of single-view novel view synthesis on GSO and RTMV.
+          </p>
+          <br/>
+
+          <img src="figures/nvs_consistency.png" style="width:60%">
+          <p class="text-center" style="font-size: 22px">
+            3D consistency scores on GSO and RTMV.
+          </p>
+          <br/>
+
+          <img src="figures/singleview_nvs.png" style="width:80%">
+          <p class="text-center" style="font-size: 22px">
+            Qualitative comparison of single-view NVS, on GSO (Left) and RTMV (Right).
+          </p>
+          <br/>
+
+          <img src="figures/nvs_nerf.png" style="width:80%">
+          <p class="text-center" style="font-size: 22px">
+            NVS examples using TOSS on Synthetic NeRF dataset.
+          </p>
+          <br/>
+
+          <img src="figures/nvs_random.png" style="width:80%">
+          <p class="text-center" style="font-size: 22px">
+            Random sampled novel views using TOSS.
+          </p>
+          <br/>
+            
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+  <br>
+
+  <section>
+    <div class="container">
+      <div class="row">
+        <div class="col-12 text-center">
+            <h2>3D Generation Results on the GSO and RTMV Datasets</h2>
+            <hr style="margin-top:0px">
+          
+            <img src="figures/3D_generation_metrics.png" style="width:40%">
+          <p class="text-center" style="font-size: 22px">
+            Quantitative comparison of single-view 3D reconstruction on GSO and RTMV.
+          </p>
+          <br/>
+          
+          <img src="figures/3D_generation.png" style="width:80%">
+          <p class="text-center" style="font-size: 22px">
+            Qualitative comparison of 3D reconstruction on GSO and RTMV.
+          </p>
+          <br/>
+
+          <video width="100%" playsinline="" autoplay="autoplay" loop="loop" preload="" muted="">
+            <source src="video/3d_generation_video.mp4" type="video/mp4">
+        </video>
+          <p class="text-center" style="font-size: 22px">
+            3D generation results based on in-the-wild images.
+          </p>
+          <br/>
+
+          
+        </div>
+      </div>
+    </div>
+  </section>
+  <br>
+  
+
+
+
+  <!-- citing -->
+  <div class="container">
+    <div class="row ">
+      <div class="col-12">
+          <h3>Citation</h3>
+          <hr style="margin-top:0px">
+              <pre style="background-color: #e9eeef;padding: 1.25em 1.5em">
+<code>@article{
+}</code>
+              </pre>
+          <hr>
+      </div>
+    </div>
+  </div>
+
+  <footer class="text-center" style="margin-bottom:10px">
+    This page is inspired by <a href="https://liuyuan-pal.github.io/SyncDreamer/" target="_blank">SyncDreamer</a>.
+</footer>
+
+
+</body>
+</html>
