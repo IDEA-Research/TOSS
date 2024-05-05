@@ -9,7 +9,7 @@ Official implementation for *TOSS: High-quality Text-guided Novel View Synthesis
 
 **TOSS introduces text as high-level sementic information to constraint the NVS solution space for more controllable and more plausible  results.**
 
-https://github.com/IDEA-Research/TOSS/blob/page/video/3d_generation_video.mp4
+assets/3d_generation_video.mp4
 
 ## [Project Page](https://toss3d.github.io/) | [ArXiv](https://arxiv.org/abs/2310.10644) | [Weights](https://huggingface.co/shiyukai/TOSS)
 
