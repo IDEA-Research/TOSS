@@ -9,7 +9,7 @@ Official implementation for *TOSS: High-quality Text-guided Novel View Synthesis
 
 **TOSS introduces text as high-level sementic information to constraint the NVS solution space for more controllable and more plausible  results.**
 
-## [Project Page](https://toss3d.github.io/) | [ArXiv](https://arxiv.org/abs/2310.10644) | [Weights](https://huggingface.co/shiyukai/TOSS)
+## [Project Page](https://toss3d.github.io/) | [ArXiv](https://arxiv.org/abs/2310.10644) | [Weights](https://drive.google.com/drive/folders/15URQHblOVi_7YXZtgdFpjZAlKsoHylsq?usp=sharing)
 
 
 https://github.com/IDEA-Research/TOSS/assets/54578597/cd64c6c5-fef8-43c2-a223-7930ad6a71b7
@@ -31,7 +31,7 @@ git clone https://github.com/openai/CLIP.git
 pip install -e CLIP/
 ```
 ### Weights
-Download pretrain weights from [this link](https://huggingface.co/shiyukai/TOSS) to sub-directory ./ckpt
+Download pretrain weights from [this link](https://drive.google.com/drive/folders/15URQHblOVi_7YXZtgdFpjZAlKsoHylsq?usp=sharing) to sub-directory ./ckpt
 
 ## Inference
 
