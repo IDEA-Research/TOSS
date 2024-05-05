@@ -12,9 +12,8 @@ Official implementation for *TOSS: High-quality Text-guided Novel View Synthesis
 ## [Project Page](https://toss3d.github.io/) | [ArXiv](https://arxiv.org/abs/2310.10644) | [Weights](https://huggingface.co/shiyukai/TOSS)
 
 
-<iframe src="assets/3d_generation_video.mp4" scrolling="no" border="0" frameborder="no" 
-framespacing="0" allowfullscreen="true" height=600 width=800> 
-</iframe>
+https://github.com/IDEA-Research/TOSS/assets/54578597/cd64c6c5-fef8-43c2-a223-7930ad6a71b7
+
 
 ## Install
 
