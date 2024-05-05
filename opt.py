@@ -37,10 +37,15 @@ def get_opts():
                         help='size of img')
     parser.add_argument('--acc_grad', type=int, default=None,
                         help='accumulate grad')
-    parser.add_argument('--eval_guidance_scale', type=float, default=1,
-                        help='guidance scale for eval')  
-    parser.add_argument('--eval_guidance_scale2', type=float, default=1,
-                        help='guidance scale for eval')  
+    # parser.add_argument('--eval_guidance_scale1', type=float, default=1,
+    #                     help='prompt guidance scale for eval')  
+    # parser.add_argument('--eval_guidance_scale2', type=float, default=1,
+    #                     help='img guidance scale for eval')  
+    # WERN: duplicate
+    parser.add_argument('--eval_prompt_guidance_scale', type=float, default=1,
+                        help='prompt guidance scale for eval')  
+    parser.add_argument('--eval_img_guidance_scale', type=float, default=1,
+                        help='img guidance scale for eval')  
     parser.add_argument('--eval_guidance_scale_low', type=float, default=1,
                         help='guidance scale for eval')     
     parser.add_argument('--eval_use_ema_scope', action="store_true",
@@ -82,6 +87,8 @@ def get_opts():
                         all_images: uniformly from all pixels of ALL images
                         same_image: uniformly from all pixels of a SAME image
                         ''')
+    parser.add_argument('--max_steps', type=int, default=100000,
+                        help='max number of steps to train')
     parser.add_argument('--num_epochs', type=int, default=30,
                         help='number of training epochs')
     parser.add_argument('--num_gpus', type=int, default=1,
@@ -176,6 +183,22 @@ def get_opts():
     parser.add_argument('--multi_offset', type=int, default=8, 
                         help='num of deformable offsets for each sample')
     
-
+    # textual inversion 
+    parser.add_argument("--data_root", type=str,
+                        help='root directory of dataset for textual inversion')
+    parser.add_argument("--placeholder_string", 
+                        type=str, 
+                        help="Placeholder string which will be used to denote the concept in future prompts. Overwrites the config options.")
+    parser.add_argument("--init_word", 
+                        type=str, 
+                        help="Word to use as source for initial token embedding")
+    parser.add_argument("--embedding_manager_ckpt", 
+                        type=str, 
+                        default="", 
+                        help="Initialize embedding manager from a checkpoint")
+    parser.add_argument("--embedding_path", 
+                        type=str, 
+                        help="Path to a pre-trained embedding manager checkpoint")
+                        
 
     return parser.parse_args()

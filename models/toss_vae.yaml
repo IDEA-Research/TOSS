@@ -17,12 +17,11 @@ model:
     scale_factor: 0.18215
     use_ema: True
     only_mid_control: False
-    ucg_123: 0.5
-    loss_weight: "eps"
+    ucg_txt: 0.5
     max_timesteps: 1000
     min_timesteps: 0
     finetune: True
-    img_ucg: 0.05
+    ucg_img: 0.05
 
     scheduler_config: # 10000 warmup steps
       target: ldm.lr_scheduler.LambdaLinearScheduler
@@ -34,7 +33,7 @@ model:
         f_min: [ 1. ]
 
     unet_config:
-      target: cldm.toss.UNetModel
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel_toss
       params:
         image_size: 32 # unused
         in_channels: 4
@@ -98,24 +97,6 @@ data800k:
       image_transforms:
         size: 256
 
-data:
-  target: datasets.objaverse.ObjaverseDataModuleFromConfig
-  params:
-    root_dir: '/comp_robot/mm_generative/data/.objaverse/hf-objaverse-v1/views_whole_sphere'
-    batch_size: 128
-    num_workers: 12
-    total_view: 12
-    caption: "rerank"
-    train:
-      validation: False
-      image_transforms:
-        size: 256
-
-    validation:
-      validation: True
-      image_transforms:
-        size: 256
-
 
 data_car:
   target: datasets.objaverse_car.ObjaverseDataModuleFromConfig
@@ -126,40 +107,6 @@ data_car:
     total_view: 12
     caption: 'rerank'
     pose_enc: "freq"
-    train:
-      validation: False
-      image_transforms:
-        size: 256
-
-    validation:
-      validation: True
-      image_transforms:
-        size: 256
-
-srn_data:
-  target: datasets.SRNDataset.SRNDataModuleFromConfig
-  params:
-    root_dir: '/comp_robot/mm_generative/data/nerf/srn_cars/'
-    batch_size: 96
-    num_workers: 16
-    caption: "rerank"
-    train:
-      validation: False
-      image_transforms:
-        size: 256
-
-    validation:
-      validation: True
-      image_transforms:
-        size: 256
-
-srn_chairs:
-  target: datasets.SRNDataset_chairs.SRNDataModuleFromConfig
-  params:
-    root_dir: '/comp_robot/mm_generative/data/nerf/srn_chairs/'
-    batch_size: 96
-    num_workers: 16
-    caption: "rerank"
     train:
       validation: False
       image_transforms:

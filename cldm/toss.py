@@ -1,4 +1,5 @@
 import einops
+from typing import Dict
 import torch
 import torch as th
 import torch.nn as nn
@@ -6,105 +7,31 @@ from contextlib import nullcontext
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR
 
-from ldm.modules.diffusionmodules.util import (
-    conv_nd,
-    linear,
-    zero_module,
-    timestep_embedding,
-)
-
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from einops import rearrange, repeat
 from torchvision.utils import make_grid
-from ldm.modules.attention import SpatialTransformer, SpatialTransformer_gate
-from ldm.modules.diffusionmodules.openaimodel import UNetModel, UNetModel_pose, TimestepEmbedSequential, ResBlock, Downsample, AttentionBlock
 from ldm.models.diffusion.ddpm import LatentDiffusion
-from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
+from ldm.util import log_txt_as_img, default, instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
-
-# viz
-from viz import save_image_tensor2cv2
-import os
-
-
-class UNetModel(UNetModel_pose):
-    def forward(self, x, timesteps=None, context=None, y=None, delta_pose=None, **kwargs):
-        """
-        Apply the model to an input batch.
-        :param x: an [N x C x ...] Tensor of inputs.
-        :param timesteps: a 1-D batch of timesteps.
-        :param context: conditioning plugged in via crossattn
-        :param y: an [N] Tensor of labels, if class-conditional.
-        :return: an [N x C x ...] Tensor of outputs.
-        """
-        assert (y is not None) == (
-            self.num_classes is not None
-        ), "must specify y if and only if the model is class-conditional"
-        hs = []
-        t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
-        emb = self.time_embed(t_emb)
-        
-        # concat
-        if "CA" in self.temp_attn: 
-            emb = torch.cat([emb, emb], dim=0)
-
-        if self.num_classes is not None:
-            assert y.shape == (x.shape[0],)
-            emb = emb + self.label_emb(y)
-
-        # camera pose embed
-        if (self.pose_enc == "freq") or (self.pose_enc == "vae"):
-            dir_embed = self.dir_encoder(delta_pose[:,0:2])
-            pos_embed = self.z_encoder(delta_pose[:,-1:])
-            pos_emb = self.pose_net(torch.cat([dir_embed, pos_embed], dim=-1)).unsqueeze(1)
-        elif (self.pose_enc == "identity") or (self.pose_enc == "zero"):
-            pos_emb = self.pose_net(delta_pose).unsqueeze(1)
-        else:
-            pos_emb = None
-
-        # module
-        h = x.type(self.dtype)
-        for module in self.input_blocks:
-            h = module(h, emb, context, pos_emb)
-            hs.append(h)
-        h = self.middle_block(h, emb, context, pos_emb)
-        for module in self.output_blocks:
-            h = th.cat([h, hs.pop()], dim=1)
-            h = module(h, emb, context, pos_emb)
-        h = h.type(x.dtype)
-        if self.predict_codebook_ids:
-            return self.id_predictor(h)[:x.shape[0]//2] if "CA" in self.temp_attn else self.id_predictor(h)
-        else:
-            return self.out(h)[:x.shape[0]//2] if "CA" in self.temp_attn else self.out(h)
-
 
 
 class TOSS(LatentDiffusion):
-    def __init__(self, control_key, only_mid_control, ucg_123=0., loss_weight="eps", \
+    def __init__(self, control_key, only_mid_control, ucg_txt=0., \
                 max_timesteps=1000, min_timesteps=0, finetune=False, scheduler_config=None, \
-                img_ucg=0., half_sample=False, *args, **kwargs):
+                ucg_img=0., *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.control_key = control_key
         self.only_mid_control = only_mid_control
         self.control_scales = [1.0] * 13
-        self.ucg_123 = ucg_123
-        self.loss_weight = loss_weight
-        print("Using loss weight: ", self.loss_weight)
+        self.ucg_txt = ucg_txt
 
         self.max_timesteps = max_timesteps
         self.min_timesteps = min_timesteps
 
         # finetune trunk or not
         self.finetune = finetune
-        self.img_ucg = img_ucg
+        self.ucg_img = ucg_img
         self.count = 0
-        self.half_sample = half_sample
-
-        # load img embedding
-        # model = instantiate_from_config(cond_stage_img_config)
-        # self.cond_stage_model_img = model.eval()
-        # for param in self.cond_stage_model_img.parameters():
-        #     param.requires_grad = False
 
         self.use_scheduler = scheduler_config is not None
         if self.use_scheduler:
@@ -129,58 +56,59 @@ class TOSS(LatentDiffusion):
         # encode
         concat = self.encode_first_stage(((control*2-1).to(self.device))).mode().detach() # rectify scale
 
-        # To support classifier-free guidance, randomly drop out only text conditioning 5%, only image conditioning 5%, and both 5%.
-        if self.training and self.ucg_123>0:
-            uncond = self.ucg_123
+        # To support classifier-free guidance, randomly drop out only text conditioning 50%, only image conditioning 5%, and both 5%.
+        if self.training and self.ucg_txt>0:
+            uncond = self.ucg_txt
             random = torch.rand(x.size(0), device=x.device)
             prompt_mask = rearrange(random < uncond, "n -> n 1 1")
 
             # z.shape: [8, 4, 64, 64]; c.shape: [8, 1, 768]
+            # c: should be [b, 77, 768]
+            if isinstance(c, list) and isinstance(c[0], str):
+                c = self.get_learned_conditioning(c)
             with torch.enable_grad():
                 null_prompt = self.get_learned_conditioning([""]).detach()
                 c = torch.where(prompt_mask, null_prompt, c)
 
             # ucg for input img
-            if self.img_ucg > 0:
-                uncond = self.img_ucg
+            if self.ucg_img > 0:
+                uncond = self.ucg_img
                 random = torch.rand(x.size(0), device=x.device)
-                input_mask = 1 - rearrange((random >= self.ucg_123 - uncond).float() * (random < self.ucg_123 + uncond).float(), "n -> n 1 1 1")
+                input_mask = 1 - rearrange((random >= self.ucg_txt - uncond).float() * (random < self.ucg_txt + uncond).float(), "n -> n 1 1 1")
                 concat = input_mask * concat
+        else:
+            if isinstance(c, list) and isinstance(c[0], str):
+                c = self.get_learned_conditioning(c)
 
         return x, dict(c_crossattn=[c], c_concat=[control], delta_pose=delta_pose, in_concat=[concat])
 
-    def apply_model(self, x_noisy, t, cond, *args, **kwargs):
+    def apply_model(self, x_noisy, t, cond:Dict, *args, **kwargs):
         assert isinstance(cond, dict)
         diffusion_model = self.model.diffusion_model
-
         cond_txt = torch.cat(cond['c_crossattn'], 1)
-        # input img emb as cross attn
-        # hint = torch.cat(cond['c_concat'], 1)*2-1
-        # clip_emb = self.get_learned_img_conditioning(hint).detach()
-
-        if self.half_sample:
-            null_prompt = self.get_learned_conditioning([""]).detach().repeat(x_noisy.shape[0],1,1)
-            eps = diffusion_model(x=torch.cat([x_noisy] + cond['in_concat'], dim=0), \
-            timesteps=t, context=cond_txt, delta_pose=cond['delta_pose'], null_prompt=null_prompt)
-        else:
-            eps = diffusion_model(x=torch.cat([x_noisy] + cond['in_concat'], dim=0), \
+        eps = diffusion_model(x=torch.cat([x_noisy] + cond['in_concat'], dim=0), \
                 timesteps=t, context=cond_txt, delta_pose=cond['delta_pose'])
 
         return eps
-
-    # @torch.no_grad()
-    # def get_learned_img_conditioning(self, c):
-    #     if self.cond_stage_forward is None:
-    #         if hasattr(self.cond_stage_model_img, 'encode') and callable(self.cond_stage_model_img.encode):
-    #             c = self.cond_stage_model_img.encode(c)
-    #             if isinstance(c, DiagonalGaussianDistribution):
-    #                 c = c.mode()
-    #         else:
-    #             c = self.cond_stage_model_img(c)
-    #     else:
-    #         assert hasattr(self.cond_stage_model_img, self.cond_stage_forward)
-    #         c = getattr(self.cond_stage_model_img, self.cond_stage_forward)(c)
-    #     return c
+    
+    def get_learned_conditioning(self, c):
+        if self.cond_stage_forward is None:
+            if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
+                if self.embedding_manager is not None: # for textual-inversion
+                    if isinstance(c, dict) and 'c_crossattn' in c:
+                        c['c_crossattn'] = [self.cond_stage_model.encode(c['c_crossattn'][0], embedding_manager=self.embedding_manager)] # ugly [[str, str, str]]
+                    else:
+                        c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
+                else:
+                    c = self.cond_stage_model.encode(c)
+                if isinstance(c, DiagonalGaussianDistribution):
+                    c = c.mode()
+            else:
+                c = self.cond_stage_model(c)
+        else:
+            assert hasattr(self.cond_stage_model, self.cond_stage_forward)
+            c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
+        return c
 
     @torch.no_grad()
     def get_unconditional_conditioning(self, N):
@@ -200,6 +128,9 @@ class TOSS(LatentDiffusion):
         delta_p = c['delta_pose'][:N,...]
         in_concat = c["in_concat"][0][:N]
         c_cat, c = c["c_concat"][0][:N], c["c_crossattn"][0][:N]
+        # check if c is a list of str -> turn it into a list of tensors
+        if isinstance(c, list) and isinstance(c[0], str):
+            c = self.get_learned_conditioning(c)
 
         N = min(z.shape[0], N)
         n_row = min(z.shape[0], n_row)
@@ -228,31 +159,28 @@ class TOSS(LatentDiffusion):
         # ddim sample
         ddim_steps = 50
         x_T = None
-        # noise = torch.randn_like(z)
-        # x_T = self.q_sample(x_start=z, t=(torch.full(fill_value=999, size=(z.shape[0],))).to(self.device).long(), noise=noise)
 
         if sample:
             # get denoise row
             uc_cat = c_cat
             uc_cross = self.get_unconditional_conditioning(N)
-            if self.img_ucg > 0.:
+            if self.ucg_img > 0.:
                 uc_inconcat = torch.zeros_like(in_concat).to(self.device)
             else:
                 uc_inconcat = in_concat
             uc_full = {"c_concat": [uc_cat], "c_crossattn": [uc_cross], "delta_pose":delta_p, "in_concat":[uc_inconcat]}
-            samples, z_denoise_row = self.sample_log(cond={"c_concat": [c_cat], "c_crossattn": [uc_cross], "delta_pose":delta_p, "in_concat":[in_concat]},
-                                             batch_size=N, ddim=use_ddim,
-                                             ddim_steps=ddim_steps, eta=ddim_eta,
-                                             unconditional_guidance_scale=unconditional_guidance_scale,
-                                             unconditional_conditioning=uc_full,
-                                             x_T=x_T
-                                             )
+            samples, z_denoise_row = self.sample_log(
+                cond={"c_concat": [c_cat], "c_crossattn": [uc_cross], "delta_pose":delta_p, "in_concat":[in_concat]},
+                batch_size=N, ddim=use_ddim,
+                ddim_steps=ddim_steps, eta=ddim_eta,
+                unconditional_guidance_scale=unconditional_guidance_scale,
+                unconditional_conditioning=uc_full,
+                x_T=x_T
+            )
             x_samples = self.decode_first_stage(samples)
             log["samples"] = x_samples
             # plot denoise
             if plot_denoise_rows:
-                # denoise_grid = self._get_denoise_row_from_list(z_denoise_row['x_inter'])
-                # log["ddim_cfg_denoise_inter"] = denoise_grid
                 denoise_grid = self._get_denoise_row_from_list(z_denoise_row['pred_x0'])
                 log["ddim_ucg_denoise_pred"] = denoise_grid
 
@@ -260,7 +188,7 @@ class TOSS(LatentDiffusion):
         if unconditional_guidance_scale >= 1.0:
             uc_cross = self.get_unconditional_conditioning(N)
             uc_cat = c_cat  # torch.zeros_like(c_cat)
-            if self.img_ucg > 0.:
+            if self.ucg_img > 0.:
                 uc_inconcat = torch.zeros_like(in_concat).to(self.device)
             else:
                 uc_inconcat = in_concat
@@ -277,8 +205,6 @@ class TOSS(LatentDiffusion):
             log[f"samples_cfg_scale_{unconditional_guidance_scale:.2f}"] = x_samples_cfg
             # plot denoise
             if plot_denoise_rows:
-                # denoise_grid = self._get_denoise_row_from_list(z_denoise_row['x_inter'])
-                # log["ddim_denoise_inter"] = denoise_grid
                 denoise_grid = self._get_denoise_row_from_list(z_denoise_row['pred_x0'])
                 log["ddim_denoise_pred"] = denoise_grid
 
@@ -308,32 +234,41 @@ class TOSS(LatentDiffusion):
 
     def configure_optimizers(self):
         lr = self.learning_rate
-        if not self.sd_locked:
-            params += list(self.model.diffusion_model.output_blocks.parameters())
-            params += list(self.model.diffusion_model.out.parameters())
-
-        # get cross attn
-        model_params = []
-        cross_attn_params = []
-        pose_net = []
-        for n, m in self.model.named_parameters(): 
-            if 'attn1' in n or 'attn_mid' in n:
-                cross_attn_params.append(m)
-                print(n)
-            elif 'pose_net' in n:
-                pose_net.append(m)
-                print(n)
-            else:
-                model_params.append(m)
-        
-        if self.finetune:
-            opt = torch.optim.AdamW([{"params": model_params, "lr": lr},
-                        {"params": cross_attn_params, "lr": lr},
-                        {"params": pose_net, "lr": lr},], lr=lr)
+        if self.embedding_manager is not None: # If using textual inversion
+            embedding_params = list(self.embedding_manager.embedding_parameters())
+            if self.unfreeze_model:
+                model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
+                opt = torch.optim.AdamW(
+                    [{"params": embedding_params, "lr": lr}, {"params": model_params}], lr=self.model_lr)
+            else: # otherwise, only optimize the embeddings
+                opt = torch.optim.AdamW(embedding_params, lr=lr)
         else:
-            opt = torch.optim.AdamW([{"params": model_params, "lr": lr},
-                            {"params": cross_attn_params, "lr": lr*2},
-                            {"params": pose_net, "lr": lr*10},], lr=lr)
+            if not self.sd_locked:
+                params += list(self.model.diffusion_model.output_blocks.parameters())
+                params += list(self.model.diffusion_model.out.parameters())
+
+            # get cross attn
+            model_params = []
+            cross_attn_params = []
+            pose_net = []
+            for n, m in self.model.named_parameters(): 
+                if 'attn1' in n or 'attn_mid' in n:
+                    cross_attn_params.append(m)
+                    print(n)
+                elif 'pose_net' in n:
+                    pose_net.append(m)
+                    print(n)
+                else:
+                    model_params.append(m)
+            
+            if self.finetune:
+                opt = torch.optim.AdamW([{"params": model_params, "lr": lr},
+                            {"params": cross_attn_params, "lr": lr},
+                            {"params": pose_net, "lr": lr},], lr=lr)
+            else:
+                opt = torch.optim.AdamW([{"params": model_params, "lr": lr},
+                                {"params": cross_attn_params, "lr": lr*2},
+                                {"params": pose_net, "lr": lr*10},], lr=lr)
         
         if self.use_scheduler:
             assert 'target' in self.scheduler_config
@@ -365,7 +300,8 @@ class TOSS(LatentDiffusion):
         if self.model.conditioning_key is not None:
             assert c is not None
             if self.cond_stage_trainable:
-                c = self.get_learned_conditioning(c)
+                if isinstance(c,list) and isinstance(c[0], str):
+                    c = self.get_learned_conditioning(c)
             if self.shorten_cond_schedule:  # TODO: drop this option
                 tc = self.cond_ids[t].to(self.device)
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
@@ -389,33 +325,15 @@ class TOSS(LatentDiffusion):
         else:
             raise NotImplementedError()
 
-        # sup on x0
-        # pred_x0 = self.predict_start_from_noise(x_noisy, t=t, noise=model_output)
-        # loss_x0 = self.get_loss(pred_x0, x_start, mean=False).mean([1, 2, 3])
-
-        # sup on noise
+        # supervision on eps
         loss_eps = self.get_loss(model_output, noise, mean=False).mean([1, 2, 3])
-
-        # weight loss
-        if self.loss_weight == 'eps':
-            loss_simple = loss_eps
-        elif self.loss_weight == 'x0':
-            loss_simple = loss_eps*(1-self.alphas_cumprod[t])/self.alphas_cumprod[t]
-        elif self.loss_weight == 'mix':
-            pred_x0 = self.predict_start_from_noise(x_noisy, t=t, noise=model_output)
-            loss_x0 = self.get_loss(pred_x0, x_start, mean=False).mean([1, 2, 3])
-            loss_simple = loss_eps + loss_x0
-        elif self.loss_weight == 'sds':
-            loss_simple = loss_eps*(1-self.alphas_cumprod[t])
-        elif self.loss_weight == 'recip_eps':
-            loss_simple = loss_eps/self.alphas_cumprod[t]
+        loss_simple = loss_eps
 
         # average
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
 
         logvar_t = self.logvar[t].to(self.device)
         loss = loss_simple / torch.exp(logvar_t) + logvar_t
-        # loss = loss_simple / torch.exp(self.logvar) + self.logvar
         if self.learn_logvar:
             loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
             loss_dict.update({'logvar': self.logvar.data.mean()})
@@ -423,33 +341,19 @@ class TOSS(LatentDiffusion):
         loss = self.l_simple_weight * loss.mean()
 
         # higher weight for high timestep
-        steps = self.lvlb_weights.shape[0]-1
         loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
         loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
-        # self.timestep_weight = self.timestep_weight.to(self.device)
-        # loss_vlb = (self.timestep_weight[t] * loss_vlb).mean()
 
         loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
         loss += (self.original_elbo_weight * loss_vlb)
         loss_dict.update({f'{prefix}/loss': loss})
+        
+        if self.embedding_manager is not None and self.embedding_reg_weight > 0:
+            loss_embedding_reg = self.embedding_manager.embedding_to_coarse_loss().mean()
 
-        # viz
-        # save_path = "/home/shiyukai/ControlNet/exp/viz/res512"
-        # if not os.path.exists(save_path):
-        #     os.mkdir(save_path)
-        # target_viz = self.decode_first_stage(x_start)*0.5+0.5
-        # noise_viz = self.decode_first_stage(x_noisy)*0.5+0.5
-        # cond_viz = (torch.cat(cond['c_concat'], 1))
-        # pred_x0 = self.predict_start_from_noise(x_noisy, t=t, noise=model_output)
-        # pred_viz = self.decode_first_stage(pred_x0)*0.5+0.5
-        # for i in range(t.shape[0]):
-        #     save_path_t = f'{save_path}/{t[i]}/'
-        #     if not os.path.exists(save_path_t):
-        #         os.mkdir(save_path_t)
-        #     save_image_tensor2cv2(target_viz[i], f'{save_path_t}/target_{t[i]}_{self.count}.png')
-        #     save_image_tensor2cv2(cond_viz[i], f'{save_path_t}/cond_{t[i]}_{self.count}.png')
-        #     save_image_tensor2cv2(noise_viz[i], f'{save_path_t}/noise_{t[i]}_{self.count}.png')
-        #     save_image_tensor2cv2(pred_viz[i], f'{save_path_t}/pred_{t[i]}_{self.count}.png')
-        #     self.count += 1
+            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
+
+            loss += (self.embedding_reg_weight * loss_embedding_reg)
+            loss_dict.update({f'{prefix}/loss': loss})
 
         return loss, loss_dict

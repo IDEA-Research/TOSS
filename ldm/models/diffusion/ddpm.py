@@ -5,7 +5,7 @@ https://github.com/openai/improved-diffusion/blob/e94489283bb876ac1477d5dd7709bb
 https://github.com/CompVis/taming-transformers
 -- merci
 """
-
+import os
 import torch
 import torch.nn as nn
 import numpy as np
@@ -69,6 +69,7 @@ class DDPM(pl.LightningModule):
                  original_elbo_weight=0.,
                  embedding_reg_weight=0.,
                  unfreeze_model=True,
+                 model_lr=0.,
                  v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
                  l_simple_weight=1.,
                  conditioning_key=None,
@@ -110,6 +111,7 @@ class DDPM(pl.LightningModule):
         self.embedding_reg_weight = embedding_reg_weight
 
         self.unfreeze_model = unfreeze_model
+        self.model_lr = model_lr
     
         if monitor is not None:
             self.monitor = monitor
@@ -673,6 +675,14 @@ class LatentDiffusion(DDPM):
             assert config != '__is_unconditional__'
             model = instantiate_from_config(config)
             self.cond_stage_model = model
+            
+    def instantiate_embedding_manager(self, config, embedder):
+        model = instantiate_from_config(config, embedder=embedder)
+
+        if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
+            model.load(config.params.embedding_manager_ckpt)
+        
+        return model
 
     def _get_denoise_row_from_list(self, samples, desc='', force_no_decoder_quantization=False):
         denoise_row = []
@@ -1335,15 +1345,22 @@ class LatentDiffusion(DDPM):
         
         if self.embedding_manager is not None: # If using textual inversion
             embedding_params = list(self.embedding_manager.embedding_parameters())
-            
-        params = list(self.model.parameters())
-        if self.cond_stage_trainable:
-            print(f"{self.__class__.__name__}: Also optimizing conditioner params!")
-            params = params + list(self.cond_stage_model.parameters())
-        if self.learn_logvar:
-            print('Diffusion model optimizing logvar')
-            params.append(self.logvar)
-        opt = torch.optim.AdamW(params, lr=lr)
+            if self.unfreeze_model:
+                model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
+                opt = torch.optim.AdamW(
+                    [{"params": embedding_params, "lr": lr}, {"params": model_params}], lr=self.model_lr)
+            else: # otherwise, only optimize the embeddings
+                opt = torch.optim.AdamW(embedding_params, lr=lr)
+        else:
+            params = list(self.model.parameters())
+            if self.cond_stage_trainable:
+                print(f"{self.__class__.__name__}: Also optimizing conditioner params!")
+                params = params + list(self.cond_stage_model.parameters())
+            if self.learn_logvar:
+                print('Diffusion model optimizing logvar')
+                params.append(self.logvar)
+            opt = torch.optim.AdamW(params, lr=lr)
+        
         if self.use_scheduler:
             assert 'target' in self.scheduler_config
             scheduler = instantiate_from_config(self.scheduler_config)
@@ -1366,6 +1383,16 @@ class LatentDiffusion(DDPM):
         x = nn.functional.conv2d(x, weight=self.colorize)
         x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
         return x
+    
+    @rank_zero_only
+    def on_save_checkpoint(self, checkpoint):
+
+        if not self.unfreeze_model: # If we are not tuning the model itself, zero-out the checkpoint content to preserve memory.
+            checkpoint.clear()
+
+        if os.path.isdir(self.trainer.checkpoint_callback.dirpath):
+            self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, "embeddings.pt"))
+            self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
 
 
 class DiffusionWrapper(pl.LightningModule):

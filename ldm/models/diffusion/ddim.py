@@ -5,7 +5,6 @@ import numpy as np
 from tqdm import tqdm
 
 from ldm.modules.diffusionmodules.util import make_ddim_sampling_parameters, make_ddim_timesteps, noise_like, extract_into_tensor
-import pdb
 
 class DDIMSampler(object):
     def __init__(self, model, schedule="linear", **kwargs):
@@ -24,8 +23,6 @@ class DDIMSampler(object):
         self.ddim_timesteps = make_ddim_timesteps(ddim_discr_method=ddim_discretize, num_ddim_timesteps=ddim_num_steps,
                                                   num_ddpm_timesteps=self.ddpm_num_timesteps,verbose=verbose)
         
-        # if ddim_discretize == "uniform" and ddim_num_steps < 100:
-        #     self.ddim_timesteps = self.ddim_timesteps + 10
         self.ddim_timesteps = np.clip(self.ddim_timesteps, a_max=999, a_min=None)
 
         alphas_cumprod = self.model.alphas_cumprod
@@ -76,7 +73,9 @@ class DDIMSampler(object):
                verbose=True,
                x_T=None,
                log_every_t=100,
-               unconditional_guidance_scale=1.,
+               unconditional_guidance_scale2=1., # prompt-scale
+               unconditional_conditioning2=None,
+               unconditional_guidance_scale=1., # img-scale
                unconditional_conditioning=None, # this has to come in the same format as the conditioning, # e.g. as encoded tokens, ...
                dynamic_threshold=None,
                ucg_schedule=None,
@@ -119,6 +118,8 @@ class DDIMSampler(object):
                                                     log_every_t=log_every_t,
                                                     unconditional_guidance_scale=unconditional_guidance_scale,
                                                     unconditional_conditioning=unconditional_conditioning,
+                                                    unconditional_guidance_scale2=unconditional_guidance_scale2,
+                                                    unconditional_conditioning2=unconditional_conditioning2,
                                                     dynamic_threshold=dynamic_threshold,
                                                     ucg_schedule=ucg_schedule
                                                     )
@@ -131,7 +132,14 @@ class DDIMSampler(object):
                       mask=None, x0=None, img_callback=None, log_every_t=100,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None, dynamic_threshold=None,
-                      ucg_schedule=None):
+                      ucg_schedule=None, unconditional_guidance_scale2=1., unconditional_conditioning2=None,):
+        """
+        Args:
+            unconditional_guidance_scale: scale for the image
+            unconditional_conditioning: image conditioning
+            unconditional_guidance_scale2: scale for the prompt
+            unconditional_conditioning2: prompt conditioning
+        """
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
@@ -171,6 +179,8 @@ class DDIMSampler(object):
                                       corrector_kwargs=corrector_kwargs,
                                       unconditional_guidance_scale=unconditional_guidance_scale,
                                       unconditional_conditioning=unconditional_conditioning,
+                                      unconditional_guidance_scale2=unconditional_guidance_scale2,
+                                      unconditional_conditioning2=unconditional_conditioning2,
                                       dynamic_threshold=dynamic_threshold)
             img, pred_x0 = outs
             if callback: callback(i)
@@ -186,12 +196,14 @@ class DDIMSampler(object):
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None,
-                      dynamic_threshold=None):
+                      dynamic_threshold=None, unconditional_guidance_scale2=1., unconditional_conditioning2=None,):
         b, *_, device = *x.shape, x.device
 
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
             model_output = self.model.apply_model(x, t, c)
-        else:
+        
+        # one condition
+        elif unconditional_conditioning2 is None or unconditional_guidance_scale2 == 1.:
             x_in = torch.cat([x] * 2)
             t_in = torch.cat([t] * 2)
             if isinstance(c, dict):
@@ -215,6 +227,37 @@ class DDIMSampler(object):
                 c_in = torch.cat([unconditional_conditioning, c])
             model_uncond, model_t = self.model.apply_model(x_in, t_in, c_in).chunk(2)
             model_output = model_uncond + unconditional_guidance_scale * (model_t - model_uncond)
+
+        # two condition
+        else:
+            x_in = torch.cat([x] * 3)
+            t_in = torch.cat([t] * 3)
+            if isinstance(c, dict):
+                assert isinstance(unconditional_conditioning, dict)
+                assert isinstance(unconditional_conditioning2, dict)
+                c_in = dict()
+                for k in c:
+                    if isinstance(c[k], list):
+                        c_in[k] = [torch.cat([
+                            unconditional_conditioning[k][i],
+                            unconditional_conditioning2[k][i],
+                            c[k][i]]) for i in range(len(c[k]))]
+                    else:
+                        c_in[k] = torch.cat([
+                                unconditional_conditioning[k],
+                                unconditional_conditioning2[k],
+                                c[k]])
+            elif isinstance(c, list):
+                c_in = list()
+                assert isinstance(unconditional_conditioning, list)
+                assert isinstance(unconditional_conditioning2, list)
+                for i in range(len(c)):
+                    c_in.append(torch.cat([unconditional_conditioning[i], unconditional_conditioning2[i], c[i]]))
+            else:
+                c_in = torch.cat([unconditional_conditioning, unconditional_conditioning2, c])
+
+            model_uncond, model_uncond2, model_t = self.model.apply_model(x_in, t_in, c_in).chunk(3)
+            model_output = model_uncond + unconditional_guidance_scale2 * (model_t - model_uncond2) + unconditional_guidance_scale * (model_uncond2 - model_uncond)
 
         if self.model.parameterization == "v":
             e_t = self.model.predict_eps_from_z_and_v(x, t, model_output)

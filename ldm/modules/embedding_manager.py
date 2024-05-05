@@ -90,7 +90,6 @@ class EmbeddingManager(nn.Module):
             tokenized_text,
             embedded_text,
     ):
-        breakpoint()
         b, n, device = *tokenized_text.shape, tokenized_text.device
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():

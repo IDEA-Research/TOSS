@@ -1,5 +1,7 @@
 from share import *
 import gradio as gr
+import cv2
+import PIL
 import imageio
 from functools import partial
 from cldm.model import load_state_dict
@@ -27,6 +29,43 @@ seed_everything(40)
 device_idx = 0
 device = torch.device(f'cuda:{device_idx}' if torch.cuda.is_available() else 'cpu')
 
+class BackgroundRemoval:
+    def __init__(self, device='cuda'):
+        from carvekit.api.high import HiInterface
+        self.interface = HiInterface(
+            object_type="object",  # Can be "object" or "hairs-like".
+            batch_size_seg=5,
+            batch_size_matting=1,
+            device=device,
+            seg_mask_size=640,  # Use 640 for Tracer B7 and 320 for U2Net
+            matting_mask_size=2048,
+            trimap_prob_threshold=231,
+            trimap_dilation=30,
+            trimap_erosion_iters=5,
+            fp16=True,
+        )
+
+    @torch.no_grad()
+    def __call__(self, image):
+        # image: [H, W, 3] array in [0, 255].
+        image = Image.fromarray(image)
+        image = self.interface([image])[0]
+        image = np.array(image)
+        return image
+    
+def segment(mask_predictor, image=None, image_path=None):
+    if image is None:
+        assert image_path is not None, 'image_path is None and image is None'
+        image = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
+    if isinstance(image, PIL.Image.Image):
+        image = np.array(image)
+    if image.shape[-1] == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+    else:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    rgba = mask_predictor(image)  # [H, W, 4]
+    return Image.fromarray(cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
+
 def load_model_from_config(config, ckpt, device, verbose=True):
     print(f'Loading model from {ckpt}')
     pl_sd = torch.load(ckpt, map_location='cpu')
@@ -47,8 +86,8 @@ def load_model_from_config(config, ckpt, device, verbose=True):
     return model
 
 @torch.no_grad()
-def sample_model(input_im, model, sampler, precision, h, w, ddim_steps, n_samples, scale,
-                 ddim_eta, T, use_ema_scope=False, prompt=None, img_ucg=0.):
+def sample_model(input_im, model, sampler, precision, h, w, ddim_steps, n_samples, prompt_scale, img_scale,
+                 ddim_eta, T, use_ema_scope=False, prompt=None, img_ucg=0.05):
     precision_scope = autocast if precision == 'autocast' else nullcontext
     ema_scope = model.ema_scope if use_ema_scope else nullcontext
     with precision_scope('cuda'):
@@ -57,7 +96,7 @@ def sample_model(input_im, model, sampler, precision, h, w, ddim_steps, n_sample
             c_cat = input_im
             # text
             uc_cross = model.get_unconditional_conditioning(n_samples)
-            c = model.get_learned_conditioning(prompt) if scale > 1.0 else uc_cross
+            c = model.get_learned_conditioning(prompt)
             # camera pose
             delta_pose = T[None, :].repeat(n_samples, 1).to(c.device)
             # concat for concat pipline
@@ -69,14 +108,19 @@ def sample_model(input_im, model, sampler, precision, h, w, ddim_steps, n_sample
             cond['c_concat'] = [c_cat]
             cond['in_concat'] = [in_concat]
 
-            # uc
+            # uc2 for prompt
+            uc2 = {}
+            uc2['delta_pose'] = delta_pose
+            uc2['c_crossattn'] = [uc_cross]
+            uc2['c_concat'] = [c_cat]
+            uc2['in_concat'] = [in_concat]
+            
+            # uc for image
             uc = {}
             uc['delta_pose'] = delta_pose
             uc['c_crossattn'] = [uc_cross]
             uc['c_concat'] = [c_cat]
-            uc['in_concat'] = [in_concat]
-            if img_ucg > 0.:
-                uc['in_concat'] = [in_concat*0]
+            uc['in_concat'] = [in_concat*0] 
 
             shape = [4, h // 8, w // 8]
             x_T = torch.randn(in_concat.shape, device=c.device)
@@ -85,8 +129,10 @@ def sample_model(input_im, model, sampler, precision, h, w, ddim_steps, n_sample
                                              batch_size=n_samples,
                                              shape=shape,
                                              verbose=False,
-                                             unconditional_guidance_scale=scale,
+                                             unconditional_guidance_scale=img_scale,
                                              unconditional_conditioning=uc,
+                                             unconditional_guidance_scale2=prompt_scale,
+                                             unconditional_conditioning2=uc2,
                                              eta=ddim_eta,
                                              x_T=x_T)
             print(samples_ddim.shape)
@@ -200,13 +246,6 @@ def get_T_from_relative(x, y, z, pose_enc="freq")->torch.Tensor:
         raise NotImplementedError
     return d_T
 
-
-def look_around_iterator(sep=45):
-    current_values = [0, -180., 0]
-    while current_values[1] < 180:
-        yield tuple(current_values)
-        current_values[1] += sep
-
 def load_model(device, _hparams, sd_locked, only_mid_control, cfgs):
     model = instantiate_from_config(cfgs.model)
     model.load_state_dict(load_state_dict(_hparams.resume_path, location='cpu'))
@@ -216,13 +255,12 @@ def load_model(device, _hparams, sd_locked, only_mid_control, cfgs):
     model.learning_rate = _hparams.lr
     model.sd_locked = sd_locked
     model.only_mid_control = only_mid_control
-    # model.control_model.uncond_pose = _hparams.uncond_pose 
     model = model.to(device)   
     model.eval()
     return model
 
-_TITLE = "TOSS"
-GRADIO_RES_DIR = "./gradio_res"
+_TITLE = "TOSS: High-quality Text-guided Novel View Synthesis from a Single Image🌈"
+GRADIO_RES_DIR = "./outputs"
 
 def generate_loop_views(
     h, w, precision, n_samples, 
@@ -235,44 +273,40 @@ def generate_loop_views(
     cond_im, 
     prompt, 
     out_folder, 
-    sep,
+    dx,
+    dy,
     prompt_scale,
-    img_ucg, 
-    progress=gr.Progress()
+    img_scale,
+    img_ucg=0.05, 
 ):
     # preprocess image
+    # cond_im = segment(segmentor, image=cond_im)
     cond_im = preprocess_image(cond_im)
     cond_im = transforms.ToTensor()(cond_im).unsqueeze(0).to(device)
     # cond_im = cond_im * 2.0 -  1.0
     cond_im = transforms.functional.resize(cond_im, [h, w])
     
-     # path for saving results
-    if prompt is not None and len(prompt) > 0:
-        out_folder = os.path.join(GRADIO_RES_DIR, out_folder)
-        if os.path.exists(out_folder):
-            shutil.rmtree(out_folder)
-        if not os.path.exists(out_folder):
-            os.makedirs(out_folder)
+    # path for saving results
+    out_folder = os.path.join(GRADIO_RES_DIR, out_folder)
+    if not os.path.exists(out_folder):
+        os.makedirs(out_folder)
 
     # generating ...
-    assert 360 % sep == 0, "View separation should be divisible with 360"
-    progress(0, desc="Starting...")
-    for i,(dx,dy,dz) in enumerate(progress.tqdm(look_around_iterator(sep=sep))):
-        T = get_T_from_relative(dx, dy, dz, pose_enc)
-                            # TODO: integrate prompt into the model inference pipeline @yukai. Need to modify the `sample_model` function
-        x_samples_ddim = sample_model(cond_im, model, sampler, precision=precision, scale=prompt_scale, \
-                                    n_samples=n_samples, ddim_steps=ddim_steps, ddim_eta=ddim_eta, T=T, h=h, w=w, \
-                                    use_ema_scope=use_ema_scope, prompt=prompt, img_ucg=img_ucg)
-                            
-                            # save results
-        assert x_samples_ddim.shape[0] == 1
-        x_samples_ddim = x_samples_ddim[0].cpu().numpy()
-        x_samples_ddim = 255.0 * rearrange(x_samples_ddim, 'c h w -> h w c')
-        save_dir = out_folder
-        Image.fromarray(x_samples_ddim.astype(np.uint8)).save(os.path.join(save_dir, f'{i}.png'))
-        if i % 10 == 0:
-            progress(i, desc="Generating...")
-        yield Image.fromarray(x_samples_ddim.astype(np.uint8))
+    dz = 0.0 # assuming no change in distance
+    T = get_T_from_relative(dx, dy, dz, pose_enc)
+    x_samples_ddim = sample_model(cond_im, model, sampler, precision=precision, 
+                                prompt_scale=prompt_scale, img_scale=img_scale, \
+                                n_samples=n_samples, ddim_steps=ddim_steps, ddim_eta=ddim_eta, T=T, h=h, w=w, \
+                                use_ema_scope=use_ema_scope, prompt=prompt, img_ucg=img_ucg)
+                        
+    # save image
+    assert x_samples_ddim.shape[0] == 1
+    x_samples_ddim = x_samples_ddim[0].cpu().numpy()
+    x_samples_ddim = 255.0 * rearrange(x_samples_ddim, 'c h w -> h w c')
+    save_dir = out_folder
+    save_name = f'{prompt}.png' if len(prompt) > 0 else f'{dx}_{dy}.png'
+    Image.fromarray(x_samples_ddim.astype(np.uint8)).save(os.path.join(save_dir, save_name))
+    yield Image.fromarray(x_samples_ddim.astype(np.uint8))
         
 def save_gif(save_dir):
     save_dir = os.path.join(GRADIO_RES_DIR, save_dir)
@@ -287,13 +321,8 @@ if __name__ == '__main__':
     hparams = get_opts()
     sd_locked = True
     only_mid_control = False
-    model_type = "vae"
-    if model_type == "old":
-        hparams.model_cfg = "models/toss_old.yaml"
-        hparams.resume_path = "ckpt/old/epoch=204.ckpt"
-    elif model_type == "vae":
-        hparams.model_cfg = "models/toss_vae.yaml"
-        hparams.resume_path = "ckpt/vae/epoch=309.ckpt"
+    hparams.model_cfg = "models/toss_vae.yaml"
+    hparams.resume_path = "ckpt/toss.ckpt"
         
     h, w = 256, 256
     precision = 'fp32'
@@ -305,20 +334,28 @@ if __name__ == '__main__':
 
     # set config
     cfgs = OmegaConf.load(hparams.model_cfg)
+    # save path
+    os.makedirs(GRADIO_RES_DIR, exist_ok=True)
     # Load model
     # First use cpu to load models. Pytorch Lightning will automatically move it to GPUs.
     model = load_model(device, hparams, sd_locked, only_mid_control, cfgs)
     # build model
     sampler = DDIMSampler(model)
+    
+    # init segmentor
+    segmentor = BackgroundRemoval()
                     
     demo = gr.Blocks(title=_TITLE)
     with demo:
         gr.Markdown('# ' + _TITLE)
+        gr.Markdown("- TOSS can generate high-quality images from arbitrary camera poses based on a single image of arbitrary objects.")
+        gr.Markdown("- If you find results are not aligned with the prompt, try to increase the CFG for Prompt.")
+        gr.Markdown("- If you find results are unsatisfied, try more times as we use random sampling.")
         
         with gr.Row():
             cond_im, prompt = None, None
             with gr.Column(scale=0.5):
-                cond_img = gr.Image(type='pil', image_mode='RGBA', source='upload',
+                cond_img = gr.Image(type='pil', image_mode='RGBA', sources='upload',
                                     label='Input image of single object')
                 
                 # prompt
@@ -326,12 +363,13 @@ if __name__ == '__main__':
                 
                 # saving
                 out_folder = gr.Textbox(label="Output Folder", interactive=True, placeholder="e.g. ./results")
+                # pose
+                dx = gr.Slider(-90, 90, 0, label="Relative Polar Degree", interactive=True)
+                dy = gr.Slider(-180, 180, 0, label="Relative Azimuth Degree", interactive=True)
                 
-                sep = gr.Slider(0, 180, 10, label="View Separation (should be divisible with 360)",
-                                interactive=True)
-                
-                prompt_scale = gr.Slider(0.0, 10.0, 3.0, label="CFG for Prompt", interactive=True)
-                img_ucg = gr.Slider(0.0, 10.0, 0.0, label="CFG for Cond Image", interactive=True)
+                prompt_scale = gr.Slider(0.0, 50.0, 5.0, label="CFG for Prompt", interactive=True)
+                img_scale = gr.Slider(0.0, 10.0, 3.0, label="CFG for Cond Image", interactive=True)
+
                 
             with gr.Column(scale=0.5):
                 # generate views
@@ -346,7 +384,7 @@ if __name__ == '__main__':
                                         use_ema_scope, pose_enc, ddim_steps, ddim_eta, model, sampler)
         generate_button.click(
             fn=generate_loop_views_fn,
-            inputs=[cond_img, prompt, out_folder, sep, prompt_scale, img_ucg],
+            inputs=[cond_img, prompt, out_folder, dx, dy, prompt_scale, img_scale],
             outputs=novel_display
         )
         
@@ -355,5 +393,5 @@ if __name__ == '__main__':
             inputs=[out_folder],
             outputs=gif_display
         )
-        
-    demo.launch(enable_queue=True, share=True, server_name="192.168.52.143", server_port=8501)
+    demo.queue()    
+    demo.launch(share=True, server_name="0.0.0.0", server_port=8501)
