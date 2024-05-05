@@ -162,4 +162,3 @@ cython_debug/
 gradio_res/
 ckpt/
 exp/
-assets/
