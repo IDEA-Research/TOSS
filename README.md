@@ -11,7 +11,7 @@ Official implementation for *TOSS: High-quality Text-guided Novel View Synthesis
 
 https://github.com/IDEA-Research/TOSS/blob/page/video/3d_generation_video.mp4
 
-## [Project Page](https://toss3d.github.io/) | [ArXiv](https://arxiv.org/abs/2310.10644) | [Weights](https://huggingface.co/Zhengyi/CRM)
+## [Project Page](https://toss3d.github.io/) | [ArXiv](https://arxiv.org/abs/2310.10644) | [Weights](https://huggingface.co/shiyukai/TOSS)
 
 
 ## Install
