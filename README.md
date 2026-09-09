@@ -31,7 +31,7 @@ git clone https://github.com/openai/CLIP.git
 pip install -e CLIP/
 ```
 ### Weights
-Download pretrain weights from [this link](https://drive.google.com/drive/folders/15URQHblOVi_7YXZtgdFpjZAlKsoHylsq?usp=sharing) to sub-directory ./ckpt
+Download pretrain weights from [this link]([https://drive.google.com/drive/folders/15URQHblOVi_7YXZtgdFpjZAlKsoHylsq?usp=sharing](https://huggingface.co/horizon171852/TOSS/tree/main)) to sub-directory ./ckpt
 
 ## Inference
 
